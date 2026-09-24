@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VoiceCare</title><link rel="manifest" href="manifest.json"><meta name="theme-color" content="#1b1233">
+<link rel="stylesheet" href="style.css"></head>
+<body>
+<header>
+  <div class="logo">❤️ VoiceCare</div>
+  <div id="codeBar" hidden style="display:flex;gap:8px;flex-wrap:wrap">
+    <div class="badge"><span id="codeText"></span><button id="copyBtn">Copy</button></div>
+    <button id="switchBtn">Switch Family</button>
+  </div>
+</header>
+<main class="wrap">
+  <section id="welcome" class="wrap" style="padding:0">
+    <div class="card"><h1>Speak to them with love, not text.</h1>
+      <p>Record a reminder in your own voice. Your parent hears you, and taps one big button when the medicine is taken.</p></div>
+    <div class="card"><h2>New Here?</h2>
+      <button id="createFamilyBtn" class="primary-glow">✨ Create New Family</button></div>
+    <div class="card"><h2>Have a Code?</h2>
+      <input id="joinCodeInput" maxlength="6" placeholder="e.g. A9B2X4" autocomplete="off">
+      <button id="joinFamilyBtn" class="secondary-glow">Join Family</button></div>
+    <a class="linkbtn" href="elder.html">👵 Open Elder View</a>
+  </section>
+
+  <section id="dash" class="wrap" style="padding:0" hidden>
+    <div class="card"><h2>New Voice Reminder</h2>
+      <label>Medicine or task<input id="medName" placeholder="Blood Pressure Pill"></label>
+      <label>Your name (elder will see it)<input id="fromName" placeholder="Sara"></label>
+      <label>Time<input id="medTime" type="time"></label>
+      <div class="recbox">
+        <button id="recordBtn">🔴 Record Voice Note</button>
+        <div id="recTimer">00:00</div>
+        <audio id="recPreview" controls hidden></audio>
+        <small>Up to 30 seconds</small>
+      </div>
+      <button id="saveReminderBtn" class="primary-glow">💾 Save Reminder</button></div>
+    <div class="card"><h2>Active Reminders</h2><div id="reminderList"></div>
+      <p><a href="elder.html" style="color:var(--blue)">Open Elder View on the parent's phone</a></p></div>
+  </section>
+</main>
+<script type="module">
+import { db, $, doc, setDoc, getDoc, addDoc, deleteDoc, collection, getCode, setCode, today, remindersFor } from "./common.js";
+const CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+let unsub = null, rec = null, chunks = [], audioData = null, tick = null;
+
+function show(code) {
+  $("welcome").hidden = !!code; $("dash").hidden = !code; $("codeBar").hidden = !code;
+  if (unsub) { unsub(); unsub = null; }
+  if (code) { $("codeText").textContent = code; unsub = remindersFor(code, render); }
+}
+function render(list) {
+  const box = $("reminderList"); box.replaceChildren();
+  if (!list.length) { box.innerHTML = "<p>No reminders yet. Record your first one.</p>"; return; }
+  for (const r of list) {
+    const row = document.createElement("div"); row.className = "item";
+    const info = document.createElement("div");
+    const b = document.createElement("b"); b.textContent = r.medicineName;
+    const s = document.createElement("small");
+    const taken = r.lastTakenDate === today();
+    s.textContent = "⏰ " + r.reminderTime + (taken ? " · ✅ Taken today" : " · Waiting");
+    if (taken) s.className = "ok";
+    info.append(b, s);
+    const del = document.createElement("button"); del.className = "btn-delete"; del.textContent = "🗑️"; del.title = "Delete";
+    del.onclick = () => confirm("Delete this reminder?") && deleteDoc(doc(db, "reminders", r.id)).catch(e => alert(e.message));
+    row.append(info, del); box.append(row);
+  }
+}
+
+$("createFamilyBtn").onclick = async () => {
+  const code = Array.from({ length: 6 }, () => CHARS[Math.floor(Math.random() * CHARS.length)]).join("");
+  try { await setDoc(doc(db, "families", code), { createdAt: new Date().toISOString() }); setCode(code); show(code); }
+  catch (e) { alert("Could not create family. Check your Firebase config and rules.\n" + e.message); }
+};
+$("joinFamilyBtn").onclick = async () => {
+  const code = $("joinCodeInput").value.trim().toUpperCase();
+  if (code.length !== 6) return alert("Enter the 6-character family code.");
+  try {
+    if (!(await getDoc(doc(db, "families", code))).exists()) return alert("Code not found. Check it and try again.");
+    setCode(code); show(code);
+  } catch (e) { alert(e.message); }
+};
+$("copyBtn").onclick = () => navigator.clipboard?.writeText(getCode()).then(() => { $("copyBtn").textContent = "Copied!"; setTimeout(() => $("copyBtn").textContent = "Copy", 1500); });
+$("switchBtn").onclick = () => { setCode(null); show(null); };
+
+const toDataUrl = blob => new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = no; r.readAsDataURL(blob); });
+const fmt = n => String(Math.floor(n / 60)).padStart(2, "0") + ":" + String(n % 60).padStart(2, "0");
+
+$("recordBtn").onclick = async () => {
+  if (rec && rec.state === "recording") return rec.stop();
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch { return alert("Microphone access was blocked. Allow the microphone in your browser settings and try again."); }
+  chunks = []; rec = new MediaRecorder(stream, { audioBitsPerSecond: 32000 });
+  rec.ondataavailable = e => e.data.size && chunks.push(e.data);
+  rec.onstop = async () => {
+    clearInterval(tick); stream.getTracks().forEach(t => t.stop());
+    audioData = await toDataUrl(new Blob(chunks, { type: rec.mimeType }));
+    $("recPreview").src = audioData; $("recPreview").hidden = false;
+    $("recordBtn").textContent = "🔁 Record Again"; $("recordBtn").classList.remove("rec");
+  };
+  rec.start(); let s = 0; $("recTimer").textContent = "00:00";
+  $("recordBtn").textContent = "⏹ Stop Recording"; $("recordBtn").classList.add("rec");
+  tick = setInterval(() => { $("recTimer").textContent = fmt(++s); if (s >= 30) rec.stop(); }, 1000);
+};
+
+$("saveReminderBtn").onclick = async () => {
+  const name = $("medName").value.trim(), time = $("medTime").value;
+  if (!name || !time) return alert("Add a medicine name and a time.");
+  if (!audioData) return alert("Record a voice note first.");
+  if (audioData.length > 900000) return alert("That recording is too long. Record a shorter one.");
+  const btn = $("saveReminderBtn"); btn.disabled = true; btn.textContent = "Saving…";
+  try {
+    await addDoc(collection(db, "reminders"), {
+      familyCode: getCode(), medicineName: name, reminderTime: time, fromName: $("fromName").value.trim(),
+      audioData, createdAt: new Date().toISOString(), lastTakenDate: null
+    });
+    $("medName").value = ""; $("medTime").value = ""; $("recPreview").hidden = true; $("recPreview").removeAttribute("src");
+    $("recTimer").textContent = "00:00"; $("recordBtn").textContent = "🔴 Record Voice Note"; audioData = null;
+  } catch (e) { alert("Save failed: " + e.message); }
+  btn.disabled = false; btn.textContent = "💾 Save Reminder";
+};
+show(getCode());
+</script></body></html>
