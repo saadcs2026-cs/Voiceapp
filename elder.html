@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VoiceCare · Elder</title><link rel="manifest" href="manifest.json"><link rel="stylesheet" href="style.css"></head>
+<body>
+<main class="wrap center" style="padding-top:40px">
+  <div class="logo">❤️ VoiceCare</div>
+  <section id="codeStep" class="card" hidden>
+    <h2>Enter your family code</h2>
+    <input id="codeInput" maxlength="6" placeholder="e.g. A9B2X4" style="text-transform:uppercase;text-align:center;letter-spacing:.2em">
+    <button id="codeBtn" class="secondary-glow">Continue</button>
+  </section>
+  <section id="startStep" class="card" hidden>
+    <h2>Ready when you are</h2><p>Tap once so your reminders can play out loud.</p>
+    <button id="startBtn" class="primary-glow" style="min-height:96px;font-size:1.6rem">▶️ Start Reminders</button>
+  </section>
+  <section id="waitStep" class="card" hidden>
+    <div id="clock">--:--</div><p id="nextInfo">Listening for your reminders…</p>
+    <small>Keep this screen open.</small>
+  </section>
+</main>
+<div id="overlay" hidden>
+  <h1 id="alarmMed"></h1><p id="alarmFrom"></p>
+  <audio id="alarmAudio" loop></audio>
+  <button id="tookBtn">✅ I Took My Medicine</button>
+</div>
+<script type="module">
+import { db, $, doc, updateDoc, getCode, setCode, today, hhmm, remindersFor } from "./common.js";
+let list = [], active = null, started = false; const fired = new Set();
+
+function step() {
+  const code = getCode();
+  $("codeStep").hidden = !!code; $("startStep").hidden = !code || started; $("waitStep").hidden = !started;
+}
+$("codeBtn").onclick = () => {
+  const c = $("codeInput").value.trim().toUpperCase();
+  if (c.length !== 6) return alert("Enter the 6-character code.");
+  setCode(c); listen(); step();
+};
+$("startBtn").onclick = async () => {
+  started = true; try { await navigator.wakeLock?.request("screen"); } catch {}
+  const a = $("alarmAudio"); a.muted = true; a.play().then(() => { a.pause(); a.muted = false; }).catch(() => {});
+  step(); setInterval(check, 5000); check();
+};
+function listen() { if (getCode()) remindersFor(getCode(), l => { list = l; check(); }); }
+function check() {
+  $("clock").textContent = hhmm();
+  const next = list.find(r => r.reminderTime > hhmm() && r.lastTakenDate !== today());
+  $("nextInfo").textContent = next ? "Next: " + next.medicineName + " at " + next.reminderTime : "No more reminders today 🎉";
+  if (!started || active) return;
+  const due = list.find(r => r.reminderTime === hhmm() && r.lastTakenDate !== today() && !fired.has(r.id + today()));
+  if (due) ring(due);
+}
+function ring(r) {
+  active = r; fired.add(r.id + today());
+  $("alarmMed").textContent = r.medicineName;
+  $("alarmFrom").textContent = r.fromName ? "A message from " + r.fromName : "A message from your family";
+  const a = $("alarmAudio"); a.src = r.audioData; a.volume = 1; a.play().catch(() => {});
+  $("overlay").hidden = false; navigator.vibrate?.([500, 300, 500, 300, 500]);
+}
+$("tookBtn").onclick = async () => {
+  const r = active; $("alarmAudio").pause(); $("overlay").hidden = true; active = null;
+  try { await updateDoc(doc(db, "reminders", r.id), { lastTakenDate: today(), lastTakenAt: new Date().toISOString() }); }
+  catch (e) { alert("Could not tell your family. Check your internet.\n" + e.message); }
+};
+listen(); step();
+</script></body></html>
